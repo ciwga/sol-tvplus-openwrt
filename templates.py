@@ -188,6 +188,16 @@ uci set firewall.tv_igmp_rule.proto='igmp'
 uci set firewall.tv_igmp_rule.dest_ip='224.0.0.0/4'
 uci set firewall.tv_igmp_rule.target='ACCEPT'
 
+# TV UDP Multicast İzin Kuralı (Yayın Verisi)
+uci delete firewall.tv_udp_rule 2>/dev/null || true
+uci set firewall.tv_udp_rule=rule
+uci set firewall.tv_udp_rule.name='Allow-UDP-TV-Multicast'
+uci set firewall.tv_udp_rule.src='<<TV_ZONE_NAME>>'
+uci set firewall.tv_udp_rule.dest='<<LAN_ZONE>>'
+uci set firewall.tv_udp_rule.proto='udp'
+uci set firewall.tv_udp_rule.dest_ip='224.0.0.0/4'
+uci set firewall.tv_udp_rule.target='ACCEPT'
+
 # DNS Rebind Koruması
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.net/'
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.com/'
