@@ -13,10 +13,10 @@ SHELL_SCRIPT_TEMPLATE: Final[str] = r"""#!/bin/sh
 
 # ==============================================================================
 # DOSYA ADI: setup_tvplus.sh
-# VERSİYON: 1.0
+# VERSİYON: 1.1
 # KONFIGURASYON:
 #   - VLAN ID: <<VLAN_ID>>
-#   - WAN Interface (User Input): <<WAN_INTERFACE>>
+#   - WAN Interface: <<WAN_INTERFACE>>
 #   - LAN Interface: <<LAN_INTERFACE>>
 #   - IPTV Interface Name: <<IPTV_INTERFACE>>
 #   - TV Zone Name: <<TV_ZONE_NAME>>
@@ -81,21 +81,16 @@ fi
 # --- BÖLÜM 3: ARAYÜZ ---
 echo "📺 [3/7] IPTV Arayüzü (<<IPTV_INTERFACE>>) oluşturuluyor..."
 
-# 3.1. WAN Fiziksel Cihaz Tespiti (DSA ve swconfig uyumlu)
-# Öncelik 1: network.wan.device (Modern DSA)
-# Öncelik 2: network.wan.ifname (Eski swconfig veya PPPoE)
+# 3.1. WAN Fiziksel Cihaz Tespiti
 DETECTED_DEV=$(uci -q get network.wan.device)
 if [ -z "$DETECTED_DEV" ]; then
     DETECTED_DEV=$(uci -q get network.wan.ifname)
 fi
 
-# Eğer tespit edilen değer boşsa, kullanıcının girdiği değeri varsay.
 if [ -z "$DETECTED_DEV" ]; then
     echo "    ℹ️ Otomatik WAN tespiti yapılamadı."
     WAN_PHY_DEV="<<WAN_INTERFACE>>"
 else
-    # Tespit edilen cihaz bir Bridge (br-wan) ise uyarı ver ve kullanıcı girdisini kullan.
-    # Çünkü bridge üzerine VLAN taglemek yerine fiziksel porta taglemek daha performanslıdır.
     if echo "$DETECTED_DEV" | grep -q "br-"; then
         echo "    ⚠️ Tespit edilen arayüz bir Köprü (Bridge): $DETECTED_DEV"
         echo "    ⚠️ Stabilite için kullanıcının belirttiği fiziksel arayüz kullanılacak: <<WAN_INTERFACE>>"
@@ -106,35 +101,64 @@ else
     fi
 fi
 
-# 3.2. Temizlik (eth0.2 -> eth0)
-# Eğer cihaz adı zaten nokta içeriyorsa (VLAN), sadece kök cihazı al.
+# 3.2. Temizlik
 WAN_PHY_DEV=${WAN_PHY_DEV%%.*}
 echo "    👉 Hedef Fiziksel Arayüz: $WAN_PHY_DEV"
 
-# 3.3. Yapılandırma Temizliği
 uci delete network.<<IPTV_INTERFACE>>_dev 2>/dev/null || true
 uci delete network.<<IPTV_INTERFACE>> 2>/dev/null || true
 
 VLAN_ID="<<VLAN_ID>>"
 VLAN_DEV="${WAN_PHY_DEV}.${VLAN_ID}"
 
-# 3.4. Device Tanımı (DSA Architecture için Kritik)
-# OpenWrt 21.02+ sürümlerinde VLAN'lar ayrı bir 'device' olarak tanımlanmalıdır.
+# 3.3. Device Tanımı
 uci set network.<<IPTV_INTERFACE>>_dev=device
 uci set network.<<IPTV_INTERFACE>>_dev.name="$VLAN_DEV"
+uci set network.<<IPTV_INTERFACE>>_dev.macaddr='<<MAC_ADDRESS>>'
 uci set network.<<IPTV_INTERFACE>>_dev.type='8021q'
 uci set network.<<IPTV_INTERFACE>>_dev.ifname="$WAN_PHY_DEV"
 uci set network.<<IPTV_INTERFACE>>_dev.vid="$VLAN_ID"
-# Kullanıcının seçtiği IGMP Sürümü
 uci set network.<<IPTV_INTERFACE>>_dev.igmpversion='<<IGMP_VERSION>>'
 
-# 3.5. Interface Tanımı
+# 3.4. Interface Tanımı
 uci set network.<<IPTV_INTERFACE>>=interface
 uci set network.<<IPTV_INTERFACE>>.proto='dhcp'
 uci set network.<<IPTV_INTERFACE>>.device="$VLAN_DEV"
 uci set network.<<IPTV_INTERFACE>>.defaultroute='0'
 uci set network.<<IPTV_INTERFACE>>.peerdns='0'
 uci set network.<<IPTV_INTERFACE>>.metric='20'
+
+# 3.5. DHCP Options ve MAC
+echo "    > DHCP Kimlikleri yazılıyor (MAC, Vendor ID, Client ID, Hostname Hex)..."
+uci set network.<<IPTV_INTERFACE>>.macaddr='<<MAC_ADDRESS>>'
+uci set network.<<IPTV_INTERFACE>>.vendorid='<<VENDOR_ID>>'
+
+# Client ID (Option 61): Manager tarafından temizlenen ham hex verisi yazılır.
+uci set network.<<IPTV_INTERFACE>>.clientid='<<CLIENT_ID>>'
+
+# Hostname (Option 12): OpenWrt standart hostname'i reddettiği için sendopts (Hex) kullanılır.
+uci delete network.<<IPTV_INTERFACE>>.hostname 2>/dev/null || true
+uci delete network.<<IPTV_INTERFACE>>.sendopts 2>/dev/null || true
+uci add_list network.<<IPTV_INTERFACE>>.sendopts='12:<<HOST_NAME_HEX>>'
+
+# Option 55: Reqopts
+uci delete network.<<IPTV_INTERFACE>>.reqopts 2>/dev/null || true
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='1'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='3'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='6'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='51'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='54'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='43'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='121'
+uci add_list network.<<IPTV_INTERFACE>>.reqopts='120'
+
+# 3.6. L2 Önceliği (VLAN Priority 4 / 802.1p Egress QoS)
+echo "    > VLAN Priority (Egress QoS 4) ayarlanıyor..."
+sed -i '/exit 0/d' /etc/rc.local
+echo "ip link set $VLAN_DEV type vlan egress 0:4 1:4 2:4 3:4 4:4 5:4 6:4 7:4" >> /etc/rc.local
+echo "exit 0" >> /etc/rc.local
+# Anlık olarak uygula (hata verirse yoksay)
+ip link set "$VLAN_DEV" type vlan egress 0:4 1:4 2:4 3:4 4:4 5:4 6:4 7:4 2>/dev/null || true
 
 # --- BÖLÜM 4: FIREWALL ---
 echo "🔥 [4/7] Firewall (<<TV_ZONE_NAME>>) ve DNS Rebind ayarları..."
@@ -167,8 +191,10 @@ uci set firewall.tv_igmp_rule.target='ACCEPT'
 # DNS Rebind Koruması
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.net/'
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.com/'
+uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonlinetv.com/'
 uci add_list dhcp.@dnsmasq[0].rebind_domain='/superonline.net/'
 uci add_list dhcp.@dnsmasq[0].rebind_domain='/superonline.com/'
+uci add_list dhcp.@dnsmasq[0].rebind_domain='/superonlinetv.com/'
 
 # --- BÖLÜM 5: IGMP PROXY ---
 echo "📺 [5/7] IGMP Proxy dosyası yazılıyor..."
@@ -179,7 +205,11 @@ config phyint
     option network <<IPTV_INTERFACE>>
     option zone <<TV_ZONE_NAME>>
     option direction upstream
-    list altnet 0.0.0.0/0
+    list altnet 225.0.0.0/8
+    list altnet 233.0.0.0/8
+    list altnet 239.0.0.0/8
+    list altnet 176.235.0.0/16
+    list altnet 10.0.0.0/8
 config phyint
     option network <<LAN_INTERFACE>>
     option zone <<LAN_ZONE>>
@@ -217,7 +247,6 @@ if [ -z "$CIDR_DATA" ]; then
 fi
 
 # Gateway Hesaplama (Fallback mekanizması)
-# Verilen IP ve Subnet Mask üzerinden Gateway adresini (örneğin X.X.X.1) hesaplar.
 CALCULATED_GW=$(echo "$CIDR_DATA" | awk -F'[./]' '{
     ip1=$1; ip2=$2; ip3=$3; ip4=$4; mask=$5
     ip_int = (ip1 * 16777216) + (ip2 * 65536) + (ip3 * 256) + ip4
@@ -234,17 +263,37 @@ CALCULATED_GW=$(echo "$CIDR_DATA" | awk -F'[./]' '{
     print o1"."o2"."o3"."o4
 }')
 
-if [ -n "$CALCULATED_GW" ]; then
-    logger -t IPTV_LOG "Hesaplanan Gateway: $CALCULATED_GW"
-    # Statik rotalar (Superonline TV Sunucuları)
-    ip route replace 172.31.128.0/19 via $CALCULATED_GW dev $DEVICE
-    ip route replace 176.43.0.0/24 via $CALCULATED_GW dev $DEVICE
-    ip route replace 176.235.0.0/20 via $CALCULATED_GW dev $DEVICE
-    ip route replace 10.31.0.0/16 via $CALCULATED_GW dev $DEVICE
-    ip route replace 10.0.0.0/8 via $CALCULATED_GW dev $DEVICE
-    ip route replace 172.16.0.0/12 via $CALCULATED_GW dev $DEVICE
+# Option 3 (Gateway) varsa ubus uzerinden alınacak
+OPTION3_GW=$(ubus call network.interface.<<IPTV_INTERFACE>> status 2>/dev/null | awk '/"nexthop":/ {print $2}' | tr -d ',"' | head -n 1)
+
+ACTIVE_GW=""
+if [ -n "$OPTION3_GW" ]; then
+    logger -t IPTV_LOG "Option 3 Gateway bulundu: $OPTION3_GW"
+    ACTIVE_GW="$OPTION3_GW"
+elif [ -n "$CALCULATED_GW" ]; then
+    logger -t IPTV_LOG "Option 3 bulunamadı. Hesaplanan Fallback Gateway kullanılıyor: $CALCULATED_GW"
+    ACTIVE_GW="$CALCULATED_GW"
 else
-    logger -t IPTV_LOG "HATA: Gateway hesaplanamadı."
+    logger -t IPTV_LOG "HATA: Gateway bulunamadı veya hesaplanamadı."
+    return 1
+fi
+
+if [ -n "$ACTIVE_GW" ]; then
+    logger -t IPTV_LOG "Aktif Gateway: $ACTIVE_GW. Rotalar ekleniyor..."
+    
+    # Statik rotalar (Superonline TV Sunucuları)
+    ip route replace 172.31.128.0/19 via $ACTIVE_GW dev $DEVICE
+    ip route replace 176.43.0.0/24 via $ACTIVE_GW dev $DEVICE
+    ip route replace 176.235.0.0/20 via $ACTIVE_GW dev $DEVICE
+    ip route replace 176.235.0.0/16 via $ACTIVE_GW dev $DEVICE
+    ip route replace 10.31.0.0/16 via $ACTIVE_GW dev $DEVICE
+    ip route replace 10.0.0.0/8 via $ACTIVE_GW dev $DEVICE
+    ip route replace 172.16.0.0/12 via $ACTIVE_GW dev $DEVICE
+    
+    # 213.74.x.x DNS Rotaları
+    ip route replace 213.74.0.0/16 via $ACTIVE_GW dev $DEVICE
+else
+    logger -t IPTV_LOG "HATA: Rotalar uygulanamadı."
 fi
 EOF_HOTPLUG
 chmod +x /etc/hotplug.d/iface/99-tvplus-calc
@@ -320,6 +369,8 @@ uci -q delete network.<<IPTV_INTERFACE>>_dev
 # DNS Rebind temizliği
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.net/'
 uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonline.com/'
+uci -q del_list dhcp.@dnsmasq[0].rebind_domain='/superonlinetv.com/'
+
 
 echo "    ✅ Ağ ve DNS ayarları temizlendi."
 
