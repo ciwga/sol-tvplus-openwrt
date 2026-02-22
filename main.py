@@ -16,7 +16,7 @@ from utils import write_safe_file, print_ssh_usage
 def run_cli() -> None:
     """Komut satırı arayüzünü (CLI) başlatır ve yönetir."""
     print("\n" + "=" * 60)
-    print("📺 SUPERONLINE TV+ OPENWRT YÖNETİCİSİ (CLI v1.0 - Modular)")
+    print("📺 SUPERONLINE TV+ OPENWRT YÖNETİCİSİ")
     print("============================================================")
     print("UYARI: Bu araç sadece konfigürasyon dosyası üretir.")
     print("Router'ınıza yüklemeden önce dosyaları inceleyiniz.")
@@ -40,6 +40,14 @@ def run_cli() -> None:
          f"TV Firewall Zone İsmi [{defaults['tv_zone_name']}]: "),
         ("igmp_version",
          f"IGMP Version (2/3) [{defaults['igmp_version']}]: "),
+        ("mac_address",
+         f"Orijinal Modem MAC Adresi [{defaults['mac_address']}]: "),
+        ("client_id",
+         f"Option 61 Client ID [{defaults['client_id']}]: "),
+        ("vendor_id",
+         f"Option 60 Vendor Class ID [{defaults['vendor_id']}]: "),
+        ("host_name",
+         f"Option 12 Hostname [{defaults['host_name']}]: "),
     ]
 
     print("AYARLAR (Varsayılan değer için Enter'a basın):")
